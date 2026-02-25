@@ -1,0 +1,360 @@
+import React, { useMemo, useState } from "react";
+import * as XLSX from "xlsx";
+
+// =====================
+// Helpers
+// =====================
+const pad2 = (n) => String(n).padStart(2, "0");
+
+function parseThaiOrAnyDate(v) {
+  if (!v && v !== 0) return null;
+  if (v instanceof Date && !isNaN(v.getTime())) return v;
+
+  // Excel serial
+  if (typeof v === "number") {
+    const d = XLSX.SSF.parse_date_code(v);
+    if (d) return new Date(d.y, d.m - 1, d.d);
+  }
+
+  const s = String(v).trim();
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (m) {
+    const dd = Number(m[1]);
+    const mm = Number(m[2]);
+    let yy = Number(m[3]);
+    if (yy < 100) yy += 2000;
+    const d = new Date(yy, mm - 1, dd);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  const d2 = new Date(s);
+  return isNaN(d2.getTime()) ? null : d2;
+}
+
+function parseTimesCell(v) {
+  // "08:04 18:50" | "08:05" | "08:05, 17:03" | "08:04 12:00 13:00 18:50"
+  if (v == null || v === "") return [];
+  const s = String(v);
+  const parts = s
+    .split(/\s+/)
+    .map((p) => p.replace(/[^0-9:]/g, ""))
+    .filter(Boolean);
+
+  const times = [];
+  for (const p of parts) {
+    const m = p.match(/^(\d{1,2}):(\d{2})$/);
+    if (!m) continue;
+    const hh = Number(m[1]);
+    const mm = Number(m[2]);
+    if (hh < 0 || hh > 23 || mm < 0 || mm > 59) continue;
+    times.push({ hh, mm, raw: `${pad2(hh)}:${pad2(mm)}` });
+  }
+  times.sort((a, b) => a.hh * 60 + a.mm - (b.hh * 60 + b.mm));
+  return times;
+}
+
+function timeToMinutes(t) {
+  return t.hh * 60 + t.mm;
+}
+
+function minutesToHHMM(mins) {
+  if (mins == null || Number.isNaN(mins)) return "";
+  const h = Math.floor(mins / 60);
+  const m = Math.round(mins % 60);
+  return `${pad2(h)}:${pad2(m)}`;
+}
+
+function formatDate(d) {
+  if (!d) return "";
+  return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}`;
+}
+
+function keyDate(d) {
+  if (!d) return "";
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+function classifyLateText(inTime, policy) {
+  if (!inTime) return "อื่นๆ";
+  const toMin = (hhmm) => {
+    const [h, m] = hhmm.split(":").map(Number);
+    return h * 60 + m;
+  };
+  const start = toMin(policy.start);
+  const noDeductFrom = toMin(policy.lateNoDeductFrom);
+  const deductFrom = toMin(policy.lateDeductFrom);
+  const m = timeToMinutes(inTime);
+
+  if (m <= start) return "ปกติ";
+  if (m >= deductFrom) return "สายหักเงิน";
+  if (m >= noDeductFrom) return "สายปกติ";
+  return "ปกติ";
+}
+
+function normalizeRow(row) {
+  const pick = (keys) => {
+    for (const k of keys) {
+      if (row[k] != null && row[k] !== "") return row[k];
+    }
+    return null;
+  };
+
+  const acNo = pick(["AC-No", "AC No", "ACNo", "รหัส", "รหัสพนักงาน", "EmpCode"]);
+  const name = pick(["Name", "ชื่อ", "พนักงาน", "Employee", "EmpName"]);
+  const dept = pick(["Department", "แผนก", "ฝ่าย", "Dept"]);
+  const dateVal = pick(["Date", "วันที่", "วัน", "WorkDate"]);
+  const timeVal = pick(["Time", "เวลา", "สแกน", "Scan", "Check"]);
+
+  const date = parseThaiOrAnyDate(dateVal);
+  const times = parseTimesCell(timeVal);
+
+  return {
+    acNo: acNo != null ? String(acNo).trim() : "",
+    name: name != null ? String(name).trim() : "",
+    dept: dept != null ? String(dept).trim() : "",
+    date,
+    times,
+  };
+}
+
+function buildDaily(records, policy, workRules) {
+  // group per employee per day
+  const map = new Map();
+  for (const r of records) {
+    if (!r.date) continue;
+    const k = `${r.acNo}||${r.name}||${r.dept}||${keyDate(r.date)}`;
+    if (!map.has(k)) map.set(k, { ...r, times: [...r.times] });
+    else {
+      const cur = map.get(k);
+      cur.times.push(...r.times);
+      cur.times.sort((a, b) => timeToMinutes(a) - timeToMinutes(b));
+      map.set(k, cur);
+    }
+  }
+
+  const daily = [];
+  for (const v of map.values()) {
+    const times = v.times || [];
+
+    let inT = null;
+    let outT = null;
+    let scanType = "ปกติ"; // ปกติ / สแกนครั้งเดียว / สแกนซ้ำ / ไม่มีสแกน
+
+    if (times.length === 0) {
+      scanType = "ไม่มีสแกน";
+    } else if (times.length === 1) {
+      scanType = "สแกนครั้งเดียว";
+      inT = times[0];
+      outT = times[0];
+    } else {
+      inT = times[0];
+      outT = times[times.length - 1];
+      scanType = times.length > 2 ? "สแกนซ้ำ" : "ปกติ";
+    }
+
+    // duration
+    let durationMin = null;
+    if (times.length >= 2 && inT && outT) {
+      durationMin = Math.max(0, timeToMinutes(outT) - timeToMinutes(inT));
+    }
+
+    // Work status (HR-friendly)
+    // Return: 1 / 0 / 0.5 / ผิดปกติ
+    let workStatus = "0";
+    if (times.length === 0) {
+      workStatus = "0"; // may be leave/holiday later
+    } else if (times.length === 1) {
+      workStatus = "ผิดปกติ";
+    } else {
+      if (durationMin >= workRules.fullDayMin) workStatus = "1";
+      else if (durationMin >= workRules.halfDayMin) workStatus = "0.5";
+      else workStatus = "ผิดปกติ";
+    }
+
+    const lateStatus = scanType === "ไม่มีสแกน" ? "อื่นๆ" : classifyLateText(inT, policy);
+
+    daily.push({
+      รหัส: v.acNo,
+      ชื่อ: v.name,
+      แผนก: v.dept,
+      วันที่: formatDate(v.date),
+      เข้า: inT ? inT.raw : "",
+      ออก: outT ? outT.raw : "",
+      "ชั่วโมง(เข้า-ออก)": durationMin != null ? minutesToHHMM(durationMin) : "",
+      "เวลาทำงาน": workStatus,
+      สาย: lateStatus,
+      "รูปแบบสแกน": scanType,
+      หมายเหตุ: buildNote(workStatus, lateStatus, scanType),
+    });
+  }
+
+  daily.sort((a, b) => (a["ชื่อ"] || "").localeCompare(b["ชื่อ"] || "") || (a["วันที่"] || "").localeCompare(b["วันที่"] || ""));
+  return daily;
+}
+
+function buildNote(workStatus, lateStatus, scanType) {
+  const notes = [];
+  if (scanType === "สแกนซ้ำ") notes.push("สแกนหลายครั้ง (เลือกเข้า=ครั้งแรก, ออก=ครั้งสุดท้าย)");
+  if (scanType === "สแกนครั้งเดียว") notes.push("ขาดเข้า/ออก");
+  if (scanType === "ไม่มีสแกน") notes.push("ไม่มีข้อมูลสแกน (อาจลา/หยุด/ขาด)");
+  if (workStatus === "0.5") notes.push("ครึ่งวัน");
+  if (workStatus === "ผิดปกติ" && scanType !== "สแกนครั้งเดียว") notes.push("เวลาทำงานน้อยกว่าเกณฑ์");
+  if (lateStatus === "สายหักเงิน") notes.push("สายหักเงิน");
+  if (lateStatus === "สายปกติ") notes.push("สายไม่หักเงิน");
+  return notes.join(" | ");
+}
+
+function buildSummary(dailyRows) {
+  // aggregate per employee
+  const m = new Map();
+  const inc = (o, k, v = 1) => (o[k] = (o[k] || 0) + v);
+
+  for (const r of dailyRows) {
+    const key = `${r["รหัส"]}||${r["ชื่อ"]}||${r["แผนก"]}`;
+    if (!m.has(key)) {
+      m.set(key, {
+        รหัส: r["รหัส"],
+        ชื่อ: r["ชื่อ"],
+        แผนก: r["แผนก"],
+        "วันทำงาน=1": 0,
+        "ครึ่งวัน=0.5": 0,
+        "ขาด/ไม่มีสแกน=0": 0,
+        "ผิดปกติ": 0,
+        "สายปกติ": 0,
+        "สายหักเงิน": 0,
+        "สแกนซ้ำ": 0,
+        "สแกนครั้งเดียว": 0,
+      });
+    }
+    const s = m.get(key);
+
+    if (r["เวลาทำงาน"] === "1") inc(s, "วันทำงาน=1");
+    else if (r["เวลาทำงาน"] === "0.5") inc(s, "ครึ่งวัน=0.5");
+    else if (r["เวลาทำงาน"] === "0") inc(s, "ขาด/ไม่มีสแกน=0");
+    else inc(s, "ผิดปกติ");
+
+    if (r["สาย"] === "สายปกติ") inc(s, "สายปกติ");
+    if (r["สาย"] === "สายหักเงิน") inc(s, "สายหักเงิน");
+
+    if (r["รูปแบบสแกน"] === "สแกนซ้ำ") inc(s, "สแกนซ้ำ");
+    if (r["รูปแบบสแกน"] === "สแกนครั้งเดียว") inc(s, "สแกนครั้งเดียว");
+
+    m.set(key, s);
+  }
+
+  const out = Array.from(m.values());
+  out.sort((a, b) => (b["สายหักเงิน"] || 0) - (a["สายหักเงิน"] || 0));
+  return out;
+}
+
+function downloadXLSX({ sheetName, dailyRows, summaryRows }) {
+  const wb = XLSX.utils.book_new();
+
+  const wsDaily = XLSX.utils.json_to_sheet(dailyRows);
+  XLSX.utils.book_append_sheet(wb, wsDaily, "Daily");
+
+  const wsSum = XLSX.utils.json_to_sheet(summaryRows);
+  XLSX.utils.book_append_sheet(wb, wsSum, "Summary");
+
+  // One-click download
+  XLSX.writeFile(wb, `HR_Attendance_${sheetName || "sheet"}.xlsx`);
+}
+
+// =====================
+// UI
+// =====================
+export default function HRAttendanceAnalyzerV3() {
+  const [fileName, setFileName] = useState("");
+  const [workbook, setWorkbook] = useState(null);
+  const [sheetName, setSheetName] = useState("");
+  const [rows, setRows] = useState([]);
+
+  // Date range filter (required before summarizing)
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+
+  const [policy, setPolicy] = useState({
+    start: "08:00",
+    lateNoDeductFrom: "08:01",
+    lateDeductFrom: "08:05",
+  });
+
+  const [workRules, setWorkRules] = useState({
+    fullDayMin: 9 * 60,
+    halfDayMin: 4 * 60,
+  });
+
+  const sheetNames = useMemo(() => (workbook ? workbook.SheetNames : []), [workbook]);
+
+  const onPickFile = async (file) => {
+    if (!file) return;
+    setFileName(file.name);
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: "array" });
+    setWorkbook(wb);
+    const first = wb.SheetNames[0] || "";
+    setSheetName(first);
+
+    if (first) {
+      const ws = wb.Sheets[first];
+      const json = XLSX.utils.sheet_to_json(ws, { defval: null });
+      setRows(json);
+    } else {
+      setRows([]);
+    }
+  };
+
+  const loadSheet = () => {
+    if (!workbook || !sheetName) return;
+    const ws = workbook.Sheets[sheetName];
+    const json = XLSX.utils.sheet_to_json(ws, { defval: null });
+    setRows(json);
+  };
+
+  const normalized = useMemo(() => rows.map(normalizeRow), [rows]);
+
+  // infer min/max from data for convenience
+  const inferredRange = useMemo(() => {
+    const dates = normalized.map((r) => r.date).filter(Boolean);
+    if (!dates.length) return { min: null, max: null };
+    const mins = dates.reduce((a, b) => (a < b ? a : b));
+    const maxs = dates.reduce((a, b) => (a > b ? a : b));
+    return { min: mins, max: maxs };
+  }, [normalized]);
+
+  // filter by selected range; require both start/end
+  const normalizedInRange = useMemo(() => {
+    if (!dateFrom || !dateTo) return [];
+    const f = parseThaiOrAnyDate(dateFrom);
+    const t = parseThaiOrAnyDate(dateTo);
+    if (!f || !t) return [];
+    const fKey = keyDate(f);
+    const tKey = keyDate(t);
+    return normalized.filter((r) => r.date && keyDate(r.date) >= fKey && keyDate(r.date) <= tKey);
+  }, [normalized, dateFrom, dateTo]);
+  const daily = useMemo(() => buildDaily(normalizedInRange, policy, workRules), [normalizedInRange, policy, workRules]);
+  const summary = useMemo(() => buildSummary(daily), [daily]);
+
+  const downloadOneClick = () => {
+    if (!daily.length) {
+      alert("ยังไม่มีข้อมูล — เลือกไฟล์/โหลดชีทก่อน");
+      return;
+    }
+    try {
+      downloadXLSX({ sheetName, dailyRows: daily, summaryRows: summary });
+    } catch (e) {
+      console.error(e);
+      alert(
+        "ดาวน์โหลดไม่สำเร็จ: ถ้าใช้งานใน Preview แล้วไม่ดาวน์โหลด ให้ลองเปิดใน Browser ปกติ หรืออนุญาต Pop-up/Downloads"
+      );
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50 p-6">
+      <div className="mx-auto max-w-7xl space-y-4">
+        <div className="rounded-2xl bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <div className="text-xl font-semibold">HR Attendance Analyzer (v3)
+              <div className="text-sm text-slate-600">HR เห็นง่าย: มีคอลัมน์ “เวลาทำงาน” และ “สาย” สรุปให้เลย + เลือกช่วงวันที่ (เริ่ม-สิ้นสุด) ก่อนสรุป + ดาวน์โหลด XLSX</div>
