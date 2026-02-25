@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>HR Attendance Analyzer (HTML)</title>
+  <title>HR Attendance Analyzer (Daily Range Summary)</title>
 
   <!-- SheetJS (XLS/XLSX) -->
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
@@ -12,7 +12,7 @@
     :root{--bg:#0b1020;--card:#121a33;--muted:#8ea0c6;--text:#e9efff;--accent:#7aa2ff;--good:#33d17a;--warn:#ffcc00;--bad:#ff5c7a;}
     *{box-sizing:border-box;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;}
     body{margin:0;background:linear-gradient(180deg,#0b1020 0%,#070a14 100%);color:var(--text);}
-    .wrap{max-width:1200px;margin:0 auto;padding:24px;}
+    .wrap{max-width:1280px;margin:0 auto;padding:24px;}
     h1{margin:0 0 6px 0;font-size:22px;}
     p{margin:0 0 14px 0;color:var(--muted);line-height:1.45;}
     .grid{display:grid;grid-template-columns:1.1fr .9fr;gap:16px;}
@@ -37,22 +37,33 @@
     .tag{font-size:12px;color:var(--muted)}
     .bd{color:var(--bad)}
     table{width:100%;border-collapse:separate;border-spacing:0;overflow:hidden;border-radius:14px;border:1px solid rgba(255,255,255,.08);}
-    th,td{padding:10px 10px;border-bottom:1px solid rgba(255,255,255,.08);font-size:12px;vertical-align:top;}
-    th{background:rgba(255,255,255,.04);text-align:left;color:#cfe0ff;position:sticky;top:0;}
+    th,td{padding:10px 10px;border-bottom:1px solid rgba(255,255,255,.08);font-size:12px;vertical-align:top;white-space:nowrap;}
+    th{background:rgba(255,255,255,.04);text-align:left;color:#cfe0ff;position:sticky;top:0;z-index:2;}
     tr:last-child td{border-bottom:0;}
-    .scroll{max-height:420px;overflow:auto;border-radius:14px;}
+    .scroll{max-height:460px;overflow:auto;border-radius:14px;}
     .small{font-size:12px;color:var(--muted)}
     code{background:rgba(255,255,255,.06);padding:2px 6px;border-radius:8px;}
     .hr{height:1px;background:rgba(255,255,255,.08);margin:14px 0;}
     .tabs{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;}
-    .tab{padding:8px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);cursor:pointer;font-weight:700;font-size:12px;color:#cfe0ff;}
+    .tab{padding:8px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);cursor:pointer;font-weight:800;font-size:12px;color:#cfe0ff;}
     .tab.active{border-color:rgba(122,162,255,.55);background:rgba(122,162,255,.14);}
+
+    /* Calendar cell styles */
+    .c1{background:rgba(51,209,122,.12);}   /* 1 day */
+    .c05{background:rgba(255,204,0,.14);}  /* 0.5 day */
+    .c0{background:rgba(255,92,122,.12);}  /* 0 */
+    .cab{background:rgba(255,92,122,.18);} /* abnormal */
+    .ch{background:rgba(255,255,255,.06);} /* weekend/holiday */
+
+    .sticky-col{position:sticky;left:0;z-index:3;background:rgba(18,26,51,.98);} /* for first column */
+    .sticky-col2{position:sticky;left:120px;z-index:3;background:rgba(18,26,51,.98);} /* second */
+    .sticky-col3{position:sticky;left:280px;z-index:3;background:rgba(18,26,51,.98);} /* third */
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>HR Attendance Analyzer (Logic matched)</h1>
-    <p>อ้างอิง logic ตามโค้ด React ที่คุณส่งมา: อ่านคอลัมน์ <code>Time</code> ที่มีหลายเวลาในช่องเดียว → รวมรายวัน → เข้า=เวลาแรก ออก=เวลาสุดท้าย → แจกแจง Daily + Summary และดาวน์โหลด XLSX ปุ่มเดียว</p>
+    <h1>HR Attendance Analyzer — สรุปเป็นรายวันตามช่วงวันที่ (แบบตาราง)</h1>
+    <p>เพิ่มแท็บ <b>“ตารางรายวัน”</b> ให้ HR เลือก <b>วันเริ่ม–วันสิ้นสุด</b> แล้วระบบสร้างตารางแบบที่คุณยกตัวอย่าง (แนวเดียวกัน) จากข้อมูลสแกน</p>
 
     <div class="grid">
       <div class="card">
@@ -82,6 +93,7 @@
         <div class="tabs">
           <button class="tab active" id="tabDaily">Daily</button>
           <button class="tab" id="tabSummary">Summary</button>
+          <button class="tab" id="tabCalendar">ตารางรายวัน</button>
         </div>
 
         <div class="scroll" style="margin-top:10px;">
@@ -89,6 +101,9 @@
             <thead><tr id="prevHead"></tr></thead>
             <tbody id="prevBody"><tr><td class="small">ยังไม่มีข้อมูล</td></tr></tbody>
           </table>
+        </div>
+        <div class="small" style="margin-top:8px;">
+          ใน “ตารางรายวัน” ค่าในแต่ละวันจะเป็น <code>1</code>, <code>0.5</code>, <code>0</code> หรือ <code>ผิดปกติ</code> (อิง logic เดียวกับ Daily)
         </div>
       </div>
 
@@ -104,7 +119,27 @@
 
         <div class="hr"></div>
 
-        <div style="font-weight:800;margin-bottom:6px;color:#cfe0ff;">2) นโยบายสาย</div>
+        <div style="font-weight:800;margin-bottom:6px;color:#cfe0ff;">2) ช่วงวันที่สำหรับ “ตารางรายวัน”</div>
+        <div class="two">
+          <div>
+            <label>วันเริ่มต้น</label>
+            <input id="rangeStart" type="date" />
+          </div>
+          <div>
+            <label>วันสิ้นสุด</label>
+            <input id="rangeEnd" type="date" />
+          </div>
+        </div>
+        <div class="row" style="margin-top:10px;">
+          <label style="display:flex;align-items:center;gap:8px;margin:0;color:var(--muted);">
+            <input id="weekendAsHoliday" type="checkbox" checked />
+            ถ้า “เสาร์-อาทิตย์” ไม่มีสแกน ให้แสดงเป็น <b>ข</b> (วันหยุด)
+          </label>
+        </div>
+
+        <div class="hr"></div>
+
+        <div style="font-weight:800;margin-bottom:6px;color:#cfe0ff;">3) นโยบายสาย</div>
         <div class="three">
           <div>
             <label>เริ่มงาน</label>
@@ -122,7 +157,7 @@
 
         <div class="hr"></div>
 
-        <div style="font-weight:800;margin-bottom:6px;color:#cfe0ff;">3) เกณฑ์เวลาทำงาน</div>
+        <div style="font-weight:800;margin-bottom:6px;color:#cfe0ff;">4) เกณฑ์เวลาทำงาน</div>
         <div class="two">
           <div>
             <label>เต็มวัน (นาที) — 540 = 9 ชม.</label>
@@ -137,13 +172,8 @@
         <div class="hr"></div>
 
         <div class="small">
-          <div style="font-weight:900;color:#cfe0ff;margin-bottom:6px;">Logic สรุป</div>
-          <ul style="margin:0;padding-left:18px;line-height:1.55;">
-            <li><b>Time</b> รองรับรูปแบบ: <code>08:04 18:50</code>, <code>08:05, 17:03</code>, <code>08:04 12:00 13:00 18:50</code></li>
-            <li>รูปแบบสแกน: ไม่มีสแกน / สแกนครั้งเดียว / ปกติ (2 ครั้ง) / สแกนซ้ำ (&gt;2)</li>
-            <li>เวลาทำงาน: ไม่มีสแกน=0, สแกนครั้งเดียว=ผิดปกติ, 2+ ครั้งคำนวณนาที (ออก-เข้า) → 1/0.5/ผิดปกติ</li>
-            <li>สาย: เทียบเวลาเข้า กับ Start/NoDeductFrom/DeductFrom</li>
-          </ul>
+          <div style="font-weight:900;color:#cfe0ff;margin-bottom:6px;">หมายเหตุเรื่อง “ลากิจ/ป่วย/พักร้อน/ลา”</div>
+          <div>จากไฟล์สแกนอย่างเดียว ระบบแยกประเภทลา (ก/ป/พ/ลา) ไม่ได้ — ตอนนี้จะแสดง <b>0</b> (ไม่มีสแกน) เป็น placeholder ตาม logic เดิม และสามารถต่อยอดให้ “อิงไฟล์ลา/วันหยุด/กะ” เพิ่มเติมได้ภายหลัง</div>
         </div>
       </div>
     </div>
@@ -200,9 +230,7 @@
     return times;
   }
 
-  function timeToMinutes(t) {
-    return t.hh * 60 + t.mm;
-  }
+  function timeToMinutes(t) { return t.hh * 60 + t.mm; }
 
   function minutesToHHMM(mins) {
     if (mins == null || Number.isNaN(mins)) return '';
@@ -389,14 +417,154 @@
     return out;
   }
 
-  function downloadXLSX({ sheetName, dailyRows, summaryRows }) {
+  // =====================
+  // New: Daily Range Calendar Table
+  // =====================
+  function parseDDMMYYYY(s){
+    const m = String(s||'').match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if(!m) return null;
+    const dd=+m[1], mm=+m[2], yy=+m[3];
+    const d=new Date(yy, mm-1, dd);
+    return isNaN(d.getTime())?null:d;
+  }
+
+  function isoDate(d){
+    return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
+  }
+
+  function isWeekend(d){
+    const day = d.getDay(); // 0 sun, 6 sat
+    return day === 0 || day === 6;
+  }
+
+  function dateRange(start, end){
+    const out=[];
+    if(!start || !end) return out;
+    const a=new Date(start.getFullYear(), start.getMonth(), start.getDate());
+    const b=new Date(end.getFullYear(), end.getMonth(), end.getDate());
+    if(a>b) return out;
+    for(let d=a; d<=b; d=new Date(d.getFullYear(), d.getMonth(), d.getDate()+1)){
+      out.push(new Date(d));
+    }
+    return out;
+  }
+
+  function numWork(v){
+    if(v==='1') return 1;
+    if(v==='0.5') return 0.5;
+    return 0;
+  }
+
+  function buildCalendarTable(dailyRows, startDate, endDate, weekendHoliday){
+    const dates = dateRange(startDate, endDate);
+    if(!dates.length) return {rows:[], dates:[]};
+
+    // index daily by empKey + isoDate
+    const byEmp = new Map();
+    for(const r of dailyRows){
+      const empKey = `${r['รหัส']}||${r['ชื่อ']}||${r['แผนก']}`;
+      const d = parseDDMMYYYY(r['วันที่']);
+      if(!d) continue;
+      const dk = isoDate(d);
+      if(!byEmp.has(empKey)) byEmp.set(empKey, {info:{รหัส:r['รหัส'], ชื่อ:r['ชื่อ'], แผนก:r['แผนก']}, day:new Map()});
+      byEmp.get(empKey).day.set(dk, r);
+    }
+
+    // build rows
+    const rows=[];
+    for(const v of byEmp.values()){
+      const row={};
+      row['รหัส']=v.info['รหัส'];
+      row['ชื่อ']=v.info['ชื่อ'];
+      row['แผนก']=v.info['แผนก'];
+
+      let totalWork=0;
+      let lateCount=0;
+      let lateDed=0;
+      let abnormal=0;
+      let noScan0=0;
+
+      for(const d of dates){
+        const dk=isoDate(d);
+        const col=pad2(d.getDate()); // show day-of-month like your table
+
+        const rec = v.day.get(dk);
+        let val='0';
+        if(rec){
+          val = rec['เวลาทำงาน'];
+          if(val==='ผิดปกติ') abnormal += 1;
+          if(rec['สาย']==='สายปกติ' || rec['สาย']==='สายหักเงิน') lateCount += 1;
+          if(rec['สาย']==='สายหักเงิน') lateDed += 1;
+        }else{
+          // no record that day
+          if(weekendHoliday && isWeekend(d)){
+            val = 'ข'; // holiday mark
+          }else{
+            val = '0';
+            noScan0 += 1;
+          }
+        }
+
+        totalWork += numWork(val);
+        row[col] = val;
+      }
+
+      row['สาย'] = lateCount;
+      row['สายหักเงิน'] = lateDed;
+      row['ผิดปกติ'] = abnormal;
+      row['0(ไม่มีสแกน)'] = noScan0;
+      row['รวมวันทำงาน'] = totalWork;
+      rows.push(row);
+    }
+
+    rows.sort((a,b)=>(a['ชื่อ']||'').localeCompare(b['ชื่อ']||'', 'th'));
+
+    // totals row per day
+    const totalRow={รหัส:'', ชื่อ:'รวม', แผนก:''};
+    let sumWorkAll=0, sumLate=0, sumLateDed=0, sumAb=0, sumNoScan=0;
+    for(const d of dates){
+      const col=pad2(d.getDate());
+      let s=0;
+      for(const r of rows){
+        const v = r[col];
+        if(v==='1') s+=1;
+        else if(v==='0.5') s+=0.5;
+      }
+      totalRow[col]=s;
+    }
+    for(const r of rows){
+      sumWorkAll += Number(r['รวมวันทำงาน']||0);
+      sumLate += Number(r['สาย']||0);
+      sumLateDed += Number(r['สายหักเงิน']||0);
+      sumAb += Number(r['ผิดปกติ']||0);
+      sumNoScan += Number(r['0(ไม่มีสแกน)']||0);
+    }
+    totalRow['สาย']=sumLate;
+    totalRow['สายหักเงิน']=sumLateDed;
+    totalRow['ผิดปกติ']=sumAb;
+    totalRow['0(ไม่มีสแกน)']=sumNoScan;
+    totalRow['รวมวันทำงาน']=sumWorkAll;
+
+    return {rows:[...rows, totalRow], dates};
+  }
+
+  function cellClassForCalendar(v){
+    if(v==='1') return 'c1';
+    if(v==='0.5') return 'c05';
+    if(v==='0') return 'c0';
+    if(v==='ผิดปกติ') return 'cab';
+    if(v==='ข') return 'ch';
+    return '';
+  }
+
+  function downloadXLSX({ sheetName, dailyRows, summaryRows, calendarRows }) {
     const wb = XLSX.utils.book_new();
 
-    const wsDaily = XLSX.utils.json_to_sheet(dailyRows);
-    XLSX.utils.book_append_sheet(wb, wsDaily, 'Daily');
-
-    const wsSum = XLSX.utils.json_to_sheet(summaryRows);
-    XLSX.utils.book_append_sheet(wb, wsSum, 'Summary');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(dailyRows), 'Daily');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryRows), 'Summary');
+    if(calendarRows && calendarRows.length){
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(calendarRows), 'Calendar');
+    }
 
     XLSX.writeFile(wb, `HR_Attendance_${sheetName || 'sheet'}.xlsx`);
   }
@@ -410,16 +578,17 @@
   let rawRows = [];
   let dailyRows = [];
   let summaryRows = [];
+  let calendarRows = [];
+  let calendarDates = [];
   let activeTab = 'Daily';
 
-  function setFileName(name){
-    $('fileName').textContent = name || 'ยังไม่ได้เลือกไฟล์';
-  }
+  function setFileName(name){ $('fileName').textContent = name || 'ยังไม่ได้เลือกไฟล์'; }
 
   function setTab(name){
     activeTab = name;
     $('tabDaily').classList.toggle('active', name === 'Daily');
     $('tabSummary').classList.toggle('active', name === 'Summary');
+    $('tabCalendar').classList.toggle('active', name === 'Calendar');
     renderTable();
   }
 
@@ -438,6 +607,14 @@
     };
   }
 
+  function getRangeDates(){
+    const s = $('rangeStart').value;
+    const e = $('rangeEnd').value;
+    const sd = s ? new Date(s+"T00:00:00") : null;
+    const ed = e ? new Date(e+"T00:00:00") : null;
+    return {sd, ed};
+  }
+
   function updateKPIs(){
     $('kRaw').textContent = rawRows.length ? String(rawRows.length) : '—';
     $('kDaily').textContent = dailyRows.length ? String(dailyRows.length) : '—';
@@ -447,37 +624,74 @@
     $('kBad').textContent = dailyRows.length ? String(bad) : '—';
   }
 
+  function recomputeCalendar(){
+    const {sd, ed} = getRangeDates();
+    const weekendHoliday = $('weekendAsHoliday').checked;
+    if(!sd || !ed){
+      calendarRows = [];
+      calendarDates = [];
+      return;
+    }
+    const out = buildCalendarTable(dailyRows, sd, ed, weekendHoliday);
+    calendarRows = out.rows;
+    calendarDates = out.dates;
+  }
+
   function renderTable(){
     const head = $('prevHead');
     const body = $('prevBody');
     head.innerHTML='';
     body.innerHTML='';
 
-    const rows = (activeTab === 'Daily') ? dailyRows : summaryRows;
+    let rows = dailyRows;
+    if(activeTab==='Summary') rows = summaryRows;
+    if(activeTab==='Calendar') rows = calendarRows;
+
     if(!rows.length){
       const tr = document.createElement('tr');
       const td = document.createElement('td');
       td.className='small';
-      td.textContent='ยังไม่มีข้อมูล — เลือกไฟล์/โหลดชีท';
-      td.colSpan = 12;
+      td.textContent = 'ยังไม่มีข้อมูล — เลือกไฟล์/โหลดชีท/กำหนดช่วงวันที่';
+      td.colSpan = 40;
       tr.appendChild(td);
       body.appendChild(tr);
       return;
     }
 
     const cols = Object.keys(rows[0]);
+
+    // header
     for(const c of cols){
       const th = document.createElement('th');
       th.textContent = c;
+      // sticky for calendar first 3 columns
+      if(activeTab==='Calendar'){
+        if(c==='รหัส') th.classList.add('sticky-col');
+        if(c==='ชื่อ') th.classList.add('sticky-col2');
+        if(c==='แผนก') th.classList.add('sticky-col3');
+      }
       head.appendChild(th);
     }
 
-    const sample = rows.slice(0, 60);
+    const sample = (activeTab==='Calendar') ? rows : rows.slice(0, 60);
     for(const r of sample){
       const tr = document.createElement('tr');
       for(const c of cols){
         const td = document.createElement('td');
-        td.textContent = r[c] ?? '';
+        const v = r[c] ?? '';
+        td.textContent = v;
+
+        if(activeTab==='Calendar'){
+          if(c==='รหัส') td.classList.add('sticky-col');
+          if(c==='ชื่อ') td.classList.add('sticky-col2');
+          if(c==='แผนก') td.classList.add('sticky-col3');
+
+          // day columns are "01".."31"
+          if(/^\d{2}$/.test(c)){
+            td.classList.add(cellClassForCalendar(String(v)));
+          }
+        }
+
         tr.appendChild(td);
       }
       body.appendChild(tr);
@@ -488,6 +702,8 @@
     const normalized = rawRows.map(normalizeRow);
     dailyRows = buildDaily(normalized, getPolicy(), getWorkRules());
     summaryRows = buildSummary(dailyRows);
+    recomputeCalendar();
+
     $('downloadBtn').disabled = dailyRows.length === 0;
     updateKPIs();
     renderTable();
@@ -499,6 +715,18 @@
     if(!currentSheet) return;
     const ws = wb.Sheets[currentSheet];
     rawRows = XLSX.utils.sheet_to_json(ws, { defval: null });
+
+    // auto set range if empty: min/max dates from normalized rows
+    const norm = rawRows.map(normalizeRow).filter(r=>r.date);
+    if(norm.length){
+      const ds = norm.map(r=> new Date(r.date.getFullYear(), r.date.getMonth(), r.date.getDate()));
+      ds.sort((a,b)=>a-b);
+      const min = ds[0];
+      const max = ds[ds.length-1];
+      if(!$('rangeStart').value) $('rangeStart').value = isoDate(min);
+      if(!$('rangeEnd').value) $('rangeEnd').value = isoDate(max);
+    }
+
     recompute();
   }
 
@@ -528,7 +756,7 @@
       alert('ยังไม่มีข้อมูล — เลือกไฟล์/โหลดชีทก่อน');
       return;
     }
-    downloadXLSX({ sheetName: currentSheet, dailyRows, summaryRows });
+    downloadXLSX({ sheetName: currentSheet, dailyRows, summaryRows, calendarRows });
   }
 
   // =====================
@@ -541,13 +769,14 @@
 
   $('sheetSelect').addEventListener('change', ()=> loadSheet());
 
-  for(const id of ['start','lateNoDed','lateDed','fullDayMin','halfDayMin']){
-    $(id).addEventListener('change', ()=> recompute());
-    $(id).addEventListener('keyup', ()=> recompute());
+  for(const id of ['start','lateNoDed','lateDed','fullDayMin','halfDayMin','rangeStart','rangeEnd','weekendAsHoliday']){
+    $(id).addEventListener('change', ()=> { recomputeCalendar(); renderTable(); });
+    if($(id).tagName === 'INPUT') $(id).addEventListener('keyup', ()=> { recomputeCalendar(); renderTable(); });
   }
 
   $('tabDaily').addEventListener('click', ()=> setTab('Daily'));
   $('tabSummary').addEventListener('click', ()=> setTab('Summary'));
+  $('tabCalendar').addEventListener('click', ()=> setTab('Calendar'));
 
   const dz = $('dropZone');
   dz.addEventListener('dragover', (e)=>{e.preventDefault();dz.style.borderColor='rgba(122,162,255,.75)';});
