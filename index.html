@@ -1,360 +1,765 @@
-import React, { useMemo, useState } from "react";
-import * as XLSX from "xlsx";
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>HR Attendance Cleaner</title>
+  <!-- SheetJS (XLS/XLSX) -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <!-- JSZip (zip download) -->
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <style>
+    :root{--bg:#0b1020;--card:#121a33;--muted:#8ea0c6;--text:#e9efff;--accent:#7aa2ff;--good:#33d17a;--warn:#ffcc00;--bad:#ff5c7a;}
+    *{box-sizing:border-box;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;}
+    body{margin:0;background:linear-gradient(180deg,#0b1020 0%,#070a14 100%);color:var(--text);}
+    .wrap{max-width:1150px;margin:0 auto;padding:24px;}
+    h1{margin:0 0 8px 0;font-size:22px;}
+    p{margin:0 0 14px 0;color:var(--muted);line-height:1.45;}
+    .grid{display:grid;grid-template-columns:1.2fr .8fr;gap:16px;}
+    @media (max-width: 980px){.grid{grid-template-columns:1fr;}}
+    .card{background:rgba(18,26,51,.92);border:1px solid rgba(122,162,255,.18);border-radius:18px;padding:16px;box-shadow:0 10px 30px rgba(0,0,0,.35);}
+    .drop{border:2px dashed rgba(122,162,255,.35);border-radius:18px;padding:18px;display:flex;gap:14px;align-items:center;justify-content:space-between;}
+    .drop .left{display:flex;gap:14px;align-items:center;}
+    .pill{display:inline-flex;gap:8px;align-items:center;background:rgba(122,162,255,.12);border:1px solid rgba(122,162,255,.25);padding:6px 10px;border-radius:999px;color:var(--text);font-size:12px;}
+    .btn{appearance:none;border:0;border-radius:14px;padding:10px 12px;background:var(--accent);color:#0b1020;font-weight:700;cursor:pointer;}
+    .btn.secondary{background:transparent;color:var(--text);border:1px solid rgba(122,162,255,.35);}
+    .btn:disabled{opacity:.5;cursor:not-allowed;}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
+    label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px;}
+    input,select{width:100%;padding:10px 10px;border-radius:14px;border:1px solid rgba(122,162,255,.25);background:rgba(8,12,26,.55);color:var(--text);}
+    .two{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+    .three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;}
+    .kpi{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
+    @media (max-width: 980px){.kpi{grid-template-columns:repeat(2,1fr);} .three{grid-template-columns:1fr;} .two{grid-template-columns:1fr;}}
+    .kpi .box{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:16px;padding:12px;}
+    .kpi .n{font-size:18px;font-weight:800;margin-top:4px;}
+    .tag{font-size:12px;color:var(--muted)}
+    .ok{color:var(--good)} .wn{color:var(--warn)} .bd{color:var(--bad)}
+    table{width:100%;border-collapse:separate;border-spacing:0;overflow:hidden;border-radius:14px;border:1px solid rgba(255,255,255,.08);}
+    th,td{padding:10px 10px;border-bottom:1px solid rgba(255,255,255,.08);font-size:12px;vertical-align:top;}
+    th{background:rgba(255,255,255,.04);text-align:left;color:#cfe0ff;position:sticky;top:0;}
+    tr:last-child td{border-bottom:0;}
+    .scroll{max-height:420px;overflow:auto;border-radius:14px;}
+    .small{font-size:12px;color:var(--muted)}
+    code{background:rgba(255,255,255,.06);padding:2px 6px;border-radius:8px;}
+    .hr{height:1px;background:rgba(255,255,255,.08);margin:14px 0;}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>ระบบช่วย HR: Clean ข้อมูลสแกนเข้า-ออก → แจกแจงสถิติ + Summary (ดาวน์โหลดปุ่มเดียว)</h1>
+    <p>รองรับไฟล์ <b>.xls/.xlsx</b> จากเครื่องสแกน (เช่น ชีท <code>OD(1)</code>, <code>บัญชี-บุคคล (1)</code>). แอปนี้รันแบบ <b>Client-side</b> บน GitHub Pages ได้ (ไม่ส่งข้อมูลขึ้นเซิร์ฟเวอร์)</p>
 
-// =====================
-// Helpers
-// =====================
-const pad2 = (n) => String(n).padStart(2, "0");
+    <div class="grid">
+      <div class="card">
+        <div class="drop" id="dropZone">
+          <div class="left">
+            <div class="pill">📎 Drag & Drop ไฟล์ที่นี่</div>
+            <div class="small" id="fileName">ยังไม่ได้เลือกไฟล์</div>
+          </div>
+          <div class="row">
+            <input id="fileInput" type="file" accept=".xls,.xlsx" style="display:none" />
+            <button class="btn secondary" id="pickBtn">เลือกไฟล์</button>
+            <button class="btn" id="processBtn" disabled>ประมวลผล</button>
+          </div>
+        </div>
 
-function parseThaiOrAnyDate(v) {
-  if (!v && v !== 0) return null;
-  if (v instanceof Date && !isNaN(v.getTime())) return v;
+        <div class="hr"></div>
 
-  // Excel serial
-  if (typeof v === "number") {
-    const d = XLSX.SSF.parse_date_code(v);
-    if (d) return new Date(d.y, d.m - 1, d.d);
+        <div class="kpi">
+          <div class="box"><div class="tag">แถวข้อมูล (รวม)</div><div class="n" id="kRows">—</div></div>
+          <div class="box"><div class="tag">คน (Unique)</div><div class="n" id="kPeople">—</div></div>
+          <div class="box"><div class="tag">วัน (Unique)</div><div class="n" id="kDays">—</div></div>
+          <div class="box"><div class="tag">ผิดปกติ</div><div class="n bd" id="kBad">—</div></div>
+        </div>
+
+        <div class="hr"></div>
+
+        <div class="row" style="justify-content:space-between;align-items:flex-end;">
+          <div>
+            <div style="font-weight:800;margin-bottom:6px;">ตัวอย่างผลลัพธ์ (แจกแจงรายวัน)</div>
+            <div class="small">ถ้าคอลัมน์จากไฟล์ไม่ตรง ระบบจะพยายามเดาให้ และคุณสามารถเลือกคอลัมน์เองในด้านขวา</div>
+          </div>
+          <button class="btn" id="downloadBtn" disabled>ดาวน์โหลดทั้งหมด (ZIP)</button>
+        </div>
+
+        <div class="scroll" style="margin-top:10px;">
+          <table id="previewTable">
+            <thead><tr id="prevHead"></tr></thead>
+            <tbody id="prevBody"><tr><td class="small">ยังไม่มีข้อมูล</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="font-weight:800;margin-bottom:8px;">ตั้งค่ากติกา (แก้ได้)</div>
+
+        <div class="three">
+          <div>
+            <label>เวลาเริ่มงาน (ใช้เช็คสาย)</label>
+            <input id="startTime" type="time" value="08:00" />
+          </div>
+          <div>
+            <label>สายไม่หักเงิน ตั้งแต่</label>
+            <input id="lateNoDed" type="time" value="08:01" />
+          </div>
+          <div>
+            <label>สายหักเงิน ตั้งแต่</label>
+            <input id="lateDed" type="time" value="08:05" />
+          </div>
+        </div>
+
+        <div class="two" style="margin-top:10px;">
+          <div>
+            <label>ชั่วโมงขั้นต่ำ (น้อยกว่า = ผิดปกติ)</label>
+            <input id="minHours" type="number" step="0.25" value="4" />
+          </div>
+          <div>
+            <label>ชั่วโมงเต็มวัน (มากกว่าหรือเท่ากับ = 1 วัน)</label>
+            <input id="fullDayHours" type="number" step="0.25" value="9" />
+          </div>
+        </div>
+
+        <div class="hr"></div>
+
+        <div style="font-weight:800;margin-bottom:8px;">แมปคอลัมน์จากไฟล์ (ถ้าระบบเดาผิด)</div>
+        <div class="small">เลือก “ชีทต้นทาง” และระบุคอลัมน์ที่เป็น ชื่อ/รหัสพนักงาน + วันเวลาในการสแกน + สถานะเข้า/ออก (ถ้ามี)</div>
+
+        <div style="margin-top:10px;">
+          <label>เลือกชีท</label>
+          <select id="sheetSelect" disabled></select>
+        </div>
+
+        <div class="two" style="margin-top:10px;">
+          <div>
+            <label>คอลัมน์: ชื่อพนักงาน</label>
+            <select id="colName" disabled></select>
+          </div>
+          <div>
+            <label>คอลัมน์: รหัสพนักงาน (ถ้ามี)</label>
+            <select id="colEmpId" disabled></select>
+          </div>
+        </div>
+
+        <div class="two" style="margin-top:10px;">
+          <div>
+            <label>คอลัมน์: วันเวลา (Datetime)</label>
+            <select id="colDateTime" disabled></select>
+          </div>
+          <div>
+            <label>คอลัมน์: วันที่ (ถ้าแยก)</label>
+            <select id="colDate" disabled></select>
+          </div>
+        </div>
+
+        <div class="two" style="margin-top:10px;">
+          <div>
+            <label>คอลัมน์: เวลา (ถ้าแยก)</label>
+            <select id="colTime" disabled></select>
+          </div>
+          <div>
+            <label>คอลัมน์: IN/OUT (ถ้ามี)</label>
+            <select id="colInOut" disabled></select>
+          </div>
+        </div>
+
+        <div class="hr"></div>
+
+        <div class="small">
+          <div style="font-weight:800;color:#cfe0ff;margin-bottom:6px;">Logic ที่ระบบใช้ (สรุปสั้น)</div>
+          <ul style="margin:0;padding-left:18px;line-height:1.5;">
+            <li>ถ้ามีสแกนซ้ำ: <b>เข้า</b>ใช้เวลาแรก, <b>ออก</b>ใช้เวลาสุดท้าย</li>
+            <li>มีเข้า/ออกครบ: คำนวณชั่วโมงจาก <b>first-in → last-out</b></li>
+            <li>ชั่วโมง <code>&lt; minHours</code> ⇒ <span class="bd">ผิดปกติ</span></li>
+            <li>ชั่วโมง <code>minHours ถึง &lt; fullDayHours</code> ⇒ <span class="wn">0.5 วัน</span></li>
+            <li>ชั่วโมง <code>≥ fullDayHours</code> ⇒ <span class="ok">1 วัน</span></li>
+            <li>ขาดสแกนเข้า หรือ ขาดสแกนออก ⇒ <span class="bd">ผิดปกติ</span></li>
+            <li>สาย: เวลาเข้า ≥ 08:01 = <span class="wn">สายปกติ</span>, ≥ 08:05 = <span class="bd">สายหักเงิน</span></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  // -----------------------------
+  // Utilities
+  // -----------------------------
+  const $ = (id) => document.getElementById(id);
+
+  function toMinutes(t){
+    if(!t) return null;
+    const [hh,mm] = String(t).split(':').map(Number);
+    if(Number.isNaN(hh) || Number.isNaN(mm)) return null;
+    return hh*60+mm;
   }
 
-  const s = String(v).trim();
-  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
-  if (m) {
-    const dd = Number(m[1]);
-    const mm = Number(m[2]);
-    let yy = Number(m[3]);
-    if (yy < 100) yy += 2000;
-    const d = new Date(yy, mm - 1, dd);
-    return isNaN(d.getTime()) ? null : d;
+  function pad2(n){return String(n).padStart(2,'0');}
+
+  function formatDate(d){
+    // d: Date
+    return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
   }
 
-  const d2 = new Date(s);
-  return isNaN(d2.getTime()) ? null : d2;
-}
-
-function parseTimesCell(v) {
-  // "08:04 18:50" | "08:05" | "08:05, 17:03" | "08:04 12:00 13:00 18:50"
-  if (v == null || v === "") return [];
-  const s = String(v);
-  const parts = s
-    .split(/\s+/)
-    .map((p) => p.replace(/[^0-9:]/g, ""))
-    .filter(Boolean);
-
-  const times = [];
-  for (const p of parts) {
-    const m = p.match(/^(\d{1,2}):(\d{2})$/);
-    if (!m) continue;
-    const hh = Number(m[1]);
-    const mm = Number(m[2]);
-    if (hh < 0 || hh > 23 || mm < 0 || mm > 59) continue;
-    times.push({ hh, mm, raw: `${pad2(hh)}:${pad2(mm)}` });
+  function formatTime(d){
+    return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
   }
-  times.sort((a, b) => a.hh * 60 + a.mm - (b.hh * 60 + b.mm));
-  return times;
-}
 
-function timeToMinutes(t) {
-  return t.hh * 60 + t.mm;
-}
+  function safeStr(v){
+    if(v === null || v === undefined) return '';
+    return String(v).trim();
+  }
 
-function minutesToHHMM(mins) {
-  if (mins == null || Number.isNaN(mins)) return "";
-  const h = Math.floor(mins / 60);
-  const m = Math.round(mins % 60);
-  return `${pad2(h)}:${pad2(m)}`;
-}
-
-function formatDate(d) {
-  if (!d) return "";
-  return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}`;
-}
-
-function keyDate(d) {
-  if (!d) return "";
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-}
-
-function classifyLateText(inTime, policy) {
-  if (!inTime) return "อื่นๆ";
-  const toMin = (hhmm) => {
-    const [h, m] = hhmm.split(":").map(Number);
-    return h * 60 + m;
-  };
-  const start = toMin(policy.start);
-  const noDeductFrom = toMin(policy.lateNoDeductFrom);
-  const deductFrom = toMin(policy.lateDeductFrom);
-  const m = timeToMinutes(inTime);
-
-  if (m <= start) return "ปกติ";
-  if (m >= deductFrom) return "สายหักเงิน";
-  if (m >= noDeductFrom) return "สายปกติ";
-  return "ปกติ";
-}
-
-function normalizeRow(row) {
-  const pick = (keys) => {
-    for (const k of keys) {
-      if (row[k] != null && row[k] !== "") return row[k];
+  function parseExcelDate(v){
+    // SheetJS may give Date, number (excel serial), or string
+    if(v instanceof Date && !isNaN(v)) return v;
+    if(typeof v === 'number'){
+      // Excel date serial: use SheetJS helper
+      const o = XLSX.SSF.parse_date_code(v);
+      if(!o) return null;
+      return new Date(o.y, o.m-1, o.d, o.H||0, o.M||0, o.S||0);
+    }
+    if(typeof v === 'string'){
+      const s = v.trim();
+      if(!s) return null;
+      // Try ISO / common formats
+      const d = new Date(s);
+      if(!isNaN(d)) return d;
+      // Try DD/MM/YYYY HH:mm
+      const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+      if(m){
+        let dd=+m[1], mm=+m[2], yy=+m[3];
+        if(yy<100) yy += 2000;
+        const HH=+(m[4]||0), MM=+(m[5]||0), SS=+(m[6]||0);
+        const d2 = new Date(yy, mm-1, dd, HH, MM, SS);
+        if(!isNaN(d2)) return d2;
+      }
     }
     return null;
-  };
+  }
 
-  const acNo = pick(["AC-No", "AC No", "ACNo", "รหัส", "รหัสพนักงาน", "EmpCode"]);
-  const name = pick(["Name", "ชื่อ", "พนักงาน", "Employee", "EmpName"]);
-  const dept = pick(["Department", "แผนก", "ฝ่าย", "Dept"]);
-  const dateVal = pick(["Date", "วันที่", "วัน", "WorkDate"]);
-  const timeVal = pick(["Time", "เวลา", "สแกน", "Scan", "Check"]);
+  function guessColumn(headers, keywords){
+    // returns header string or ''
+    const lower = headers.map(h=>safeStr(h).toLowerCase());
+    for(const kw of keywords){
+      const k = kw.toLowerCase();
+      const idx = lower.findIndex(h => h.includes(k));
+      if(idx>=0) return headers[idx];
+    }
+    return '';
+  }
 
-  const date = parseThaiOrAnyDate(dateVal);
-  const times = parseTimesCell(timeVal);
+  function buildSelect(selectEl, headers, preferred){
+    selectEl.innerHTML = '';
+    const opt0 = document.createElement('option');
+    opt0.value=''; opt0.textContent='— ไม่ระบุ —';
+    selectEl.appendChild(opt0);
+    for(const h of headers){
+      const opt = document.createElement('option');
+      opt.value = h; opt.textContent = h;
+      selectEl.appendChild(opt);
+    }
+    selectEl.value = preferred || '';
+  }
 
-  return {
-    acNo: acNo != null ? String(acNo).trim() : "",
-    name: name != null ? String(name).trim() : "",
-    dept: dept != null ? String(dept).trim() : "",
-    date,
-    times,
-  };
-}
+  // -----------------------------
+  // App State
+  // -----------------------------
+  let workbook = null;
+  let rawBySheet = new Map(); // sheetName -> {headers, rows}
 
-function buildDaily(records, policy, workRules) {
-  // group per employee per day
-  const map = new Map();
-  for (const r of records) {
-    if (!r.date) continue;
-    const k = `${r.acNo}||${r.name}||${r.dept}||${keyDate(r.date)}`;
-    if (!map.has(k)) map.set(k, { ...r, times: [...r.times] });
-    else {
-      const cur = map.get(k);
-      cur.times.push(...r.times);
-      cur.times.sort((a, b) => timeToMinutes(a) - timeToMinutes(b));
-      map.set(k, cur);
+  // Processed outputs
+  let detailRows = [];
+  let summaryRows = [];
+
+  // -----------------------------
+  // File handling
+  // -----------------------------
+  function setFileName(name){
+    $('fileName').textContent = name || 'ยังไม่ได้เลือกไฟล์';
+  }
+
+  function enableMappingUI(on){
+    for(const id of ['sheetSelect','colName','colEmpId','colDateTime','colDate','colTime','colInOut']){
+      $(id).disabled = !on;
     }
   }
 
-  const daily = [];
-  for (const v of map.values()) {
-    const times = v.times || [];
-
-    let inT = null;
-    let outT = null;
-    let scanType = "ปกติ"; // ปกติ / สแกนครั้งเดียว / สแกนซ้ำ / ไม่มีสแกน
-
-    if (times.length === 0) {
-      scanType = "ไม่มีสแกน";
-    } else if (times.length === 1) {
-      scanType = "สแกนครั้งเดียว";
-      inT = times[0];
-      outT = times[0];
-    } else {
-      inT = times[0];
-      outT = times[times.length - 1];
-      scanType = times.length > 2 ? "สแกนซ้ำ" : "ปกติ";
-    }
-
-    // duration
-    let durationMin = null;
-    if (times.length >= 2 && inT && outT) {
-      durationMin = Math.max(0, timeToMinutes(outT) - timeToMinutes(inT));
-    }
-
-    // Work status (HR-friendly)
-    // Return: 1 / 0 / 0.5 / ผิดปกติ
-    let workStatus = "0";
-    if (times.length === 0) {
-      workStatus = "0"; // may be leave/holiday later
-    } else if (times.length === 1) {
-      workStatus = "ผิดปกติ";
-    } else {
-      if (durationMin >= workRules.fullDayMin) workStatus = "1";
-      else if (durationMin >= workRules.halfDayMin) workStatus = "0.5";
-      else workStatus = "ผิดปกติ";
-    }
-
-    const lateStatus = scanType === "ไม่มีสแกน" ? "อื่นๆ" : classifyLateText(inT, policy);
-
-    daily.push({
-      รหัส: v.acNo,
-      ชื่อ: v.name,
-      แผนก: v.dept,
-      วันที่: formatDate(v.date),
-      เข้า: inT ? inT.raw : "",
-      ออก: outT ? outT.raw : "",
-      "ชั่วโมง(เข้า-ออก)": durationMin != null ? minutesToHHMM(durationMin) : "",
-      "เวลาทำงาน": workStatus,
-      สาย: lateStatus,
-      "รูปแบบสแกน": scanType,
-      หมายเหตุ: buildNote(workStatus, lateStatus, scanType),
-    });
-  }
-
-  daily.sort((a, b) => (a["ชื่อ"] || "").localeCompare(b["ชื่อ"] || "") || (a["วันที่"] || "").localeCompare(b["วันที่"] || ""));
-  return daily;
-}
-
-function buildNote(workStatus, lateStatus, scanType) {
-  const notes = [];
-  if (scanType === "สแกนซ้ำ") notes.push("สแกนหลายครั้ง (เลือกเข้า=ครั้งแรก, ออก=ครั้งสุดท้าย)");
-  if (scanType === "สแกนครั้งเดียว") notes.push("ขาดเข้า/ออก");
-  if (scanType === "ไม่มีสแกน") notes.push("ไม่มีข้อมูลสแกน (อาจลา/หยุด/ขาด)");
-  if (workStatus === "0.5") notes.push("ครึ่งวัน");
-  if (workStatus === "ผิดปกติ" && scanType !== "สแกนครั้งเดียว") notes.push("เวลาทำงานน้อยกว่าเกณฑ์");
-  if (lateStatus === "สายหักเงิน") notes.push("สายหักเงิน");
-  if (lateStatus === "สายปกติ") notes.push("สายไม่หักเงิน");
-  return notes.join(" | ");
-}
-
-function buildSummary(dailyRows) {
-  // aggregate per employee
-  const m = new Map();
-  const inc = (o, k, v = 1) => (o[k] = (o[k] || 0) + v);
-
-  for (const r of dailyRows) {
-    const key = `${r["รหัส"]}||${r["ชื่อ"]}||${r["แผนก"]}`;
-    if (!m.has(key)) {
-      m.set(key, {
-        รหัส: r["รหัส"],
-        ชื่อ: r["ชื่อ"],
-        แผนก: r["แผนก"],
-        "วันทำงาน=1": 0,
-        "ครึ่งวัน=0.5": 0,
-        "ขาด/ไม่มีสแกน=0": 0,
-        "ผิดปกติ": 0,
-        "สายปกติ": 0,
-        "สายหักเงิน": 0,
-        "สแกนซ้ำ": 0,
-        "สแกนครั้งเดียว": 0,
-      });
-    }
-    const s = m.get(key);
-
-    if (r["เวลาทำงาน"] === "1") inc(s, "วันทำงาน=1");
-    else if (r["เวลาทำงาน"] === "0.5") inc(s, "ครึ่งวัน=0.5");
-    else if (r["เวลาทำงาน"] === "0") inc(s, "ขาด/ไม่มีสแกน=0");
-    else inc(s, "ผิดปกติ");
-
-    if (r["สาย"] === "สายปกติ") inc(s, "สายปกติ");
-    if (r["สาย"] === "สายหักเงิน") inc(s, "สายหักเงิน");
-
-    if (r["รูปแบบสแกน"] === "สแกนซ้ำ") inc(s, "สแกนซ้ำ");
-    if (r["รูปแบบสแกน"] === "สแกนครั้งเดียว") inc(s, "สแกนครั้งเดียว");
-
-    m.set(key, s);
-  }
-
-  const out = Array.from(m.values());
-  out.sort((a, b) => (b["สายหักเงิน"] || 0) - (a["สายหักเงิน"] || 0));
-  return out;
-}
-
-function downloadXLSX({ sheetName, dailyRows, summaryRows }) {
-  const wb = XLSX.utils.book_new();
-
-  const wsDaily = XLSX.utils.json_to_sheet(dailyRows);
-  XLSX.utils.book_append_sheet(wb, wsDaily, "Daily");
-
-  const wsSum = XLSX.utils.json_to_sheet(summaryRows);
-  XLSX.utils.book_append_sheet(wb, wsSum, "Summary");
-
-  // One-click download
-  XLSX.writeFile(wb, `HR_Attendance_${sheetName || "sheet"}.xlsx`);
-}
-
-// =====================
-// UI
-// =====================
-export default function HRAttendanceAnalyzerV3() {
-  const [fileName, setFileName] = useState("");
-  const [workbook, setWorkbook] = useState(null);
-  const [sheetName, setSheetName] = useState("");
-  const [rows, setRows] = useState([]);
-
-  // Date range filter (required before summarizing)
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
-
-  const [policy, setPolicy] = useState({
-    start: "08:00",
-    lateNoDeductFrom: "08:01",
-    lateDeductFrom: "08:05",
-  });
-
-  const [workRules, setWorkRules] = useState({
-    fullDayMin: 9 * 60,
-    halfDayMin: 4 * 60,
-  });
-
-  const sheetNames = useMemo(() => (workbook ? workbook.SheetNames : []), [workbook]);
-
-  const onPickFile = async (file) => {
-    if (!file) return;
-    setFileName(file.name);
+  async function readFile(file){
     const buf = await file.arrayBuffer();
-    const wb = XLSX.read(buf, { type: "array" });
-    setWorkbook(wb);
-    const first = wb.SheetNames[0] || "";
-    setSheetName(first);
+    workbook = XLSX.read(buf, {type:'array', cellDates:true});
 
-    if (first) {
-      const ws = wb.Sheets[first];
-      const json = XLSX.utils.sheet_to_json(ws, { defval: null });
-      setRows(json);
-    } else {
-      setRows([]);
+    rawBySheet.clear();
+    for(const sn of workbook.SheetNames){
+      const ws = workbook.Sheets[sn];
+      const json = XLSX.utils.sheet_to_json(ws, {defval:'', raw:true});
+      const headers = json.length ? Object.keys(json[0]) : [];
+      rawBySheet.set(sn, {headers, rows: json});
     }
-  };
 
-  const loadSheet = () => {
-    if (!workbook || !sheetName) return;
-    const ws = workbook.Sheets[sheetName];
-    const json = XLSX.utils.sheet_to_json(ws, { defval: null });
-    setRows(json);
-  };
+    // populate sheet select
+    $('sheetSelect').innerHTML='';
+    for(const sn of workbook.SheetNames){
+      const opt = document.createElement('option');
+      opt.value = sn; opt.textContent = sn;
+      $('sheetSelect').appendChild(opt);
+    }
 
-  const normalized = useMemo(() => rows.map(normalizeRow), [rows]);
+    // pick best default sheet: prefer OD(1) then บัญชี-บุคคล (1) else first
+    const preferred = workbook.SheetNames.find(s=>s.includes('OD'))
+      || workbook.SheetNames.find(s=>s.includes('บัญชี'))
+      || workbook.SheetNames[0];
+    $('sheetSelect').value = preferred;
 
-  // infer min/max from data for convenience
-  const inferredRange = useMemo(() => {
-    const dates = normalized.map((r) => r.date).filter(Boolean);
-    if (!dates.length) return { min: null, max: null };
-    const mins = dates.reduce((a, b) => (a < b ? a : b));
-    const maxs = dates.reduce((a, b) => (a > b ? a : b));
-    return { min: mins, max: maxs };
-  }, [normalized]);
+    enableMappingUI(true);
+    autoMapForSheet(preferred);
+    $('processBtn').disabled = false;
+  }
 
-  // filter by selected range; require both start/end
-  const normalizedInRange = useMemo(() => {
-    if (!dateFrom || !dateTo) return [];
-    const f = parseThaiOrAnyDate(dateFrom);
-    const t = parseThaiOrAnyDate(dateTo);
-    if (!f || !t) return [];
-    const fKey = keyDate(f);
-    const tKey = keyDate(t);
-    return normalized.filter((r) => r.date && keyDate(r.date) >= fKey && keyDate(r.date) <= tKey);
-  }, [normalized, dateFrom, dateTo]);
-  const daily = useMemo(() => buildDaily(normalizedInRange, policy, workRules), [normalizedInRange, policy, workRules]);
-  const summary = useMemo(() => buildSummary(daily), [daily]);
+  function autoMapForSheet(sheetName){
+    const pack = rawBySheet.get(sheetName);
+    if(!pack){ enableMappingUI(false); return; }
+    const headers = pack.headers;
 
-  const downloadOneClick = () => {
-    if (!daily.length) {
-      alert("ยังไม่มีข้อมูล — เลือกไฟล์/โหลดชีทก่อน");
+    // very tolerant guesses (Thai/English)
+    const gName = guessColumn(headers, ['ชื่อ', 'name', 'employee', 'พนักงาน']);
+    const gEmpId = guessColumn(headers, ['รหัส', 'empid', 'employee id', 'id']);
+    const gDT = guessColumn(headers, ['datetime', 'วันเวลา', 'เวลาเข้าออก', 'time stamp', 'timestamp']);
+    const gDate = guessColumn(headers, ['date', 'วันที่', 'วัน']);
+    const gTime = guessColumn(headers, ['time', 'เวลา']);
+    const gInOut = guessColumn(headers, ['in/out', 'inout', 'เข้าออก', 'สถานะ', 'type', 'direction']);
+
+    buildSelect($('colName'), headers, gName);
+    buildSelect($('colEmpId'), headers, gEmpId);
+    buildSelect($('colDateTime'), headers, gDT);
+    buildSelect($('colDate'), headers, gDate);
+    buildSelect($('colTime'), headers, gTime);
+    buildSelect($('colInOut'), headers, gInOut);
+  }
+
+  // -----------------------------
+  // Core logic
+  // -----------------------------
+  function normalizeInOut(v){
+    const s = safeStr(v).toLowerCase();
+    if(!s) return '';
+    if(s.includes('in') || s.includes('เข้า')) return 'IN';
+    if(s.includes('out') || s.includes('ออก')) return 'OUT';
+    // some devices label as 0/1
+    if(s === '0') return 'IN';
+    if(s === '1') return 'OUT';
+    return ''; // unknown
+  }
+
+  function extractEvents(pack, mapping){
+    // Returns list of {empKey, empName, empId, dt, dateKey, inout}
+    const {rows} = pack;
+    const events = [];
+
+    for(const r of rows){
+      const empName = safeStr(r[mapping.colName]);
+      const empId = safeStr(r[mapping.colEmpId]);
+      const empKey = empId || empName || '(ไม่ทราบชื่อ)';
+
+      // build datetime
+      let dt = null;
+      if(mapping.colDateTime){
+        dt = parseExcelDate(r[mapping.colDateTime]);
+      }
+      if(!dt && mapping.colDate && mapping.colTime){
+        const dPart = safeStr(r[mapping.colDate]);
+        const tPart = safeStr(r[mapping.colTime]);
+        dt = parseExcelDate(`${dPart} ${tPart}`);
+      }
+      if(!dt && mapping.colDate){
+        dt = parseExcelDate(r[mapping.colDate]);
+      }
+      if(!dt) continue;
+
+      const dateKey = formatDate(dt);
+      const inout = mapping.colInOut ? normalizeInOut(r[mapping.colInOut]) : '';
+
+      events.push({empKey, empName, empId, dt, dateKey, inout});
+    }
+
+    return events;
+  }
+
+  function splitInOutIfMissing(events){
+    // If inout missing entirely, infer: earliest as IN, latest as OUT (per person per day)
+    // This is a heuristic; anomalies are flagged.
+    const by = new Map();
+    for(const e of events){
+      const k = `${e.empKey}__${e.dateKey}`;
+      if(!by.has(k)) by.set(k, []);
+      by.get(k).push(e);
+    }
+    const out = [];
+    for(const [k, arr] of by.entries()){
+      arr.sort((a,b)=>a.dt-b.dt);
+      const hasIO = arr.some(x=>x.inout==='IN' || x.inout==='OUT');
+      if(hasIO){
+        out.push(...arr);
+      }else{
+        if(arr.length===1){
+          // unknown single scan
+          out.push({...arr[0], inout:''});
+        }else{
+          // infer
+          out.push({...arr[0], inout:'IN'});
+          for(let i=1;i<arr.length-1;i++) out.push({...arr[i], inout:'MID'});
+          out.push({...arr[arr.length-1], inout:'OUT'});
+        }
+      }
+    }
+    return out;
+  }
+
+  function classifyDay(group, cfg){
+    // group: events for person+day
+    // returns detail row
+    const dateKey = group[0].dateKey;
+    const empKey = group[0].empKey;
+    const empName = group[0].empName;
+    const empId = group[0].empId;
+
+    const inEvents = group.filter(e=>e.inout==='IN');
+    const outEvents = group.filter(e=>e.inout==='OUT');
+    const unknownIO = group.some(e=>!e.inout || e.inout==='MID');
+
+    // Determine first-in and last-out
+    let firstIn = null;
+    let lastOut = null;
+
+    if(inEvents.length){
+      inEvents.sort((a,b)=>a.dt-b.dt);
+      firstIn = inEvents[0].dt;
+    }
+    if(outEvents.length){
+      outEvents.sort((a,b)=>a.dt-b.dt);
+      lastOut = outEvents[outEvents.length-1].dt;
+    }
+
+    // If missing IN or OUT but we have timestamps, try fallback to min/max
+    let fallbackUsed = false;
+    if(!firstIn || !lastOut){
+      const all = [...group].sort((a,b)=>a.dt-b.dt);
+      if(!firstIn && all.length) { firstIn = all[0].dt; fallbackUsed = true; }
+      if(!lastOut && all.length) { lastOut = all[all.length-1].dt; fallbackUsed = true; }
+    }
+
+    // Compute hours
+    let hours = null;
+    if(firstIn && lastOut){
+      hours = (lastOut - firstIn) / 36e5;
+      if(hours < 0) hours = null;
+    }
+
+    // Work day value
+    let workValue = 'ผิดปกติ';
+    let anomaly = [];
+
+    const hasOnlyOneScan = (group.length === 1);
+    if(hasOnlyOneScan) anomaly.push('มีสแกนครั้งเดียว');
+
+    // Missing explicitly labeled IN/OUT
+    if(inEvents.length===0) anomaly.push('ไม่พบสแกนเข้า (IN)');
+    if(outEvents.length===0) anomaly.push('ไม่พบสแกนออก (OUT)');
+    if(unknownIO) anomaly.push('พบรายการที่ระบุ IN/OUT ไม่ชัด');
+    if(fallbackUsed) anomaly.push('ใช้ค่าเวลา min/max แทน (เดาจากข้อมูล)');
+
+    if(hours === null){
+      workValue = 'ผิดปกติ';
+    } else {
+      if(hours < cfg.minHours){
+        workValue = 'ผิดปกติ';
+        anomaly.push(`ชั่วโมงทำงานน้อยกว่า ${cfg.minHours} ชม.`);
+      } else if(hours < cfg.fullDayHours){
+        workValue = '0.5';
+      } else {
+        workValue = '1';
+      }
+    }
+
+    // Late status
+    let lateStatus = 'อื่นๆ';
+    if(firstIn){
+      const inMin = firstIn.getHours()*60 + firstIn.getMinutes();
+      const noDed = cfg.lateNoDed;
+      const ded = cfg.lateDed;
+      if(inMin >= ded) lateStatus = 'สายหักเงิน';
+      else if(inMin >= noDed) lateStatus = 'สายปกติ';
+      else lateStatus = 'ปกติ';
+    } else {
+      lateStatus = 'ไม่พบเวลาเข้า';
+    }
+
+    // Scan behavior summary
+    const scanInCount = inEvents.length;
+    const scanOutCount = outEvents.length;
+    let scanNote = [];
+    if(scanInCount > 1) scanNote.push(`สแกนเข้า ${scanInCount} ครั้ง (ใช้เวลาแรก)`);
+    if(scanOutCount > 1) scanNote.push(`สแกนออก ${scanOutCount} ครั้ง (ใช้เวลาสุดท้าย)`);
+    if(!scanNote.length && group.length>2) scanNote.push(`สแกน ${group.length} ครั้ง`);
+
+    // Absence / leave: cannot know without leave table, so mark "0" only if explicit policy provided.
+    // We keep 0 only when there are no scans for that day (not present in data). This requires date range.
+
+    return {
+      sheet: group[0].sheet,
+      empId,
+      empName,
+      date: dateKey,
+      first_in: firstIn ? formatTime(firstIn) : '',
+      last_out: lastOut ? formatTime(lastOut) : '',
+      work_hours: (hours===null?'':Math.round(hours*100)/100),
+      work_value: workValue, // 1 / 0.5 / ผิดปกติ
+      late: lateStatus,
+      scan_in_count: scanInCount,
+      scan_out_count: scanOutCount,
+      scan_total: group.length,
+      scan_note: scanNote.join(' | '),
+      anomaly: anomaly.join(' | ')
+    };
+  }
+
+  function buildSummary(detail){
+    // by employee (and sheet)
+    const by = new Map();
+    for(const r of detail){
+      const k = `${r.sheet}__${(r.empId||r.empName)}`;
+      if(!by.has(k)) by.set(k, {sheet:r.sheet, empId:r.empId, empName:r.empName,
+        days:0, day_1:0, day_half:0, abnormal:0,
+        late_normal:0, late_deduct:0, normal:0, other_late:0
+      });
+      const s = by.get(k);
+      s.days += 1;
+      if(r.work_value === '1') s.day_1 += 1;
+      else if(r.work_value === '0.5') s.day_half += 1;
+      else s.abnormal += 1;
+
+      if(r.late === 'ปกติ') s.normal += 1;
+      else if(r.late === 'สายปกติ') s.late_normal += 1;
+      else if(r.late === 'สายหักเงิน') s.late_deduct += 1;
+      else s.other_late += 1;
+    }
+    return Array.from(by.values());
+  }
+
+  function updateKPIs(){
+    $('kRows').textContent = String(detailRows.length || '—');
+    const people = new Set(detailRows.map(r => (r.empId||r.empName||'').trim()).filter(Boolean));
+    const days = new Set(detailRows.map(r => r.date));
+    const bad = detailRows.filter(r => r.work_value === 'ผิดปกติ').length;
+    $('kPeople').textContent = people.size ? String(people.size) : '—';
+    $('kDays').textContent = days.size ? String(days.size) : '—';
+    $('kBad').textContent = detailRows.length ? String(bad) : '—';
+  }
+
+  function renderPreview(){
+    const cols = ['sheet','empId','empName','date','first_in','last_out','work_hours','work_value','late','scan_note','anomaly'];
+    const head = $('prevHead');
+    head.innerHTML = '';
+    for(const c of cols){
+      const th = document.createElement('th');
+      th.textContent = c;
+      head.appendChild(th);
+    }
+
+    const body = $('prevBody');
+    body.innerHTML = '';
+    const sample = detailRows.slice(0, 30);
+    if(!sample.length){
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.colSpan = cols.length;
+      td.className='small';
+      td.textContent='ยังไม่มีข้อมูล';
+      tr.appendChild(td);
+      body.appendChild(tr);
       return;
     }
-    try {
-      downloadXLSX({ sheetName, dailyRows: daily, summaryRows: summary });
-    } catch (e) {
-      console.error(e);
-      alert(
-        "ดาวน์โหลดไม่สำเร็จ: ถ้าใช้งานใน Preview แล้วไม่ดาวน์โหลด ให้ลองเปิดใน Browser ปกติ หรืออนุญาต Pop-up/Downloads"
-      );
-    }
-  };
 
-  return (
-    <div className="min-h-screen bg-slate-50 p-6">
-      <div className="mx-auto max-w-7xl space-y-4">
-        <div className="rounded-2xl bg-white p-5 shadow-sm">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div>
-              <div className="text-xl font-semibold">HR Attendance Analyzer (v3)
-              <div className="text-sm text-slate-600">HR เห็นง่าย: มีคอลัมน์ “เวลาทำงาน” และ “สาย” สรุปให้เลย + เลือกช่วงวันที่ (เริ่ม-สิ้นสุด) ก่อนสรุป + ดาวน์โหลด XLSX</div>
+    for(const r of sample){
+      const tr = document.createElement('tr');
+      for(const c of cols){
+        const td = document.createElement('td');
+        td.textContent = r[c] ?? '';
+        tr.appendChild(td);
+      }
+      body.appendChild(tr);
+    }
+  }
+
+  // -----------------------------
+  // Export
+  // -----------------------------
+  function sheetFromObjects(objs){
+    return XLSX.utils.json_to_sheet(objs);
+  }
+
+  function buildWorkbook(detail, summary){
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, sheetFromObjects(detail), 'DETAIL');
+    XLSX.utils.book_append_sheet(wb, sheetFromObjects(summary), 'SUMMARY');
+    return wb;
+  }
+
+  async function downloadZip(){
+    const zip = new JSZip();
+
+    // Excel
+    const wb = buildWorkbook(detailRows, summaryRows);
+    const xlsxData = XLSX.write(wb, {bookType:'xlsx', type:'array'});
+    zip.file('attendance_detail_and_summary.xlsx', xlsxData);
+
+    // CSVs for compatibility
+    const detailCsv = XLSX.utils.sheet_to_csv(sheetFromObjects(detailRows));
+    const summaryCsv = XLSX.utils.sheet_to_csv(sheetFromObjects(summaryRows));
+    zip.file('DETAIL.csv', detailCsv);
+    zip.file('SUMMARY.csv', summaryCsv);
+
+    const blob = await zip.generateAsync({type:'blob'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `HR_Attendance_${new Date().toISOString().slice(0,10)}.zip`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  // -----------------------------
+  // Main processing action
+  // -----------------------------
+  function getConfig(){
+    return {
+      startTime: toMinutes($('startTime').value) ?? 8*60,
+      lateNoDed: toMinutes($('lateNoDed').value) ?? (8*60+1),
+      lateDed: toMinutes($('lateDed').value) ?? (8*60+5),
+      minHours: Number($('minHours').value || 4),
+      fullDayHours: Number($('fullDayHours').value || 9)
+    };
+  }
+
+  function getMapping(){
+    return {
+      sheet: $('sheetSelect').value,
+      colName: $('colName').value,
+      colEmpId: $('colEmpId').value,
+      colDateTime: $('colDateTime').value,
+      colDate: $('colDate').value,
+      colTime: $('colTime').value,
+      colInOut: $('colInOut').value
+    };
+  }
+
+  function processAll(){
+    if(!workbook) return;
+
+    const cfg = getConfig();
+
+    // We will process ALL sheets, but prioritize those likely relevant.
+    const targetSheets = workbook.SheetNames
+      .filter(sn => /OD\(1\)|บัญชี-บุคคล\s*\(1\)/.test(sn))
+      .concat(workbook.SheetNames.filter(sn => !/OD\(1\)|บัญชี-บุคคล\s*\(1\)/.test(sn)));
+
+    const allDetail = [];
+
+    for(const sn of targetSheets){
+      const pack = rawBySheet.get(sn);
+      if(!pack || !pack.rows.length) continue;
+
+      // If user selected mapping sheet, use that mapping only for that sheet; otherwise auto map per sheet.
+      const mapping = (sn === $('sheetSelect').value)
+        ? getMapping()
+        : (() => {
+            const headers = pack.headers;
+            return {
+              sheet: sn,
+              colName: guessColumn(headers, ['ชื่อ','name','employee','พนักงาน']),
+              colEmpId: guessColumn(headers, ['รหัส','empid','employee id','id']),
+              colDateTime: guessColumn(headers, ['datetime','วันเวลา','เวลาเข้าออก','time stamp','timestamp']),
+              colDate: guessColumn(headers, ['date','วันที่','วัน']),
+              colTime: guessColumn(headers, ['time','เวลา']),
+              colInOut: guessColumn(headers, ['in/out','inout','เข้าออก','สถานะ','type','direction'])
+            };
+          })();
+
+      // Must have at least name/id and datetime (or date+time)
+      if(!mapping.colName && !mapping.colEmpId) continue;
+      if(!mapping.colDateTime && !(mapping.colDate && mapping.colTime) && !mapping.colDate) continue;
+
+      let events = extractEvents(pack, mapping);
+      // attach sheet
+      events = events.map(e => ({...e, sheet: sn}));
+      events = splitInOutIfMissing(events);
+
+      // group by person+day
+      const by = new Map();
+      for(const e of events){
+        const k = `${e.empKey}__${e.dateKey}`;
+        if(!by.has(k)) by.set(k, []);
+        by.get(k).push(e);
+      }
+
+      for(const arr of by.values()){
+        arr.sort((a,b)=>a.dt-b.dt);
+        allDetail.push(classifyDay(arr, cfg));
+      }
+    }
+
+    // Sort output for HR readability
+    allDetail.sort((a,b)=>{
+      const ak = `${a.sheet}|${a.empName}|${a.date}`;
+      const bk = `${b.sheet}|${b.empName}|${b.date}`;
+      return ak.localeCompare(bk, 'th');
+    });
+
+    detailRows = allDetail;
+    summaryRows = buildSummary(detailRows);
+
+    updateKPIs();
+    renderPreview();
+
+    $('downloadBtn').disabled = detailRows.length === 0;
+  }
+
+  // -----------------------------
+  // Events
+  // -----------------------------
+  $('pickBtn').addEventListener('click', () => $('fileInput').click());
+  $('fileInput').addEventListener('change', async (e) => {
+    const f = e.target.files?.[0];
+    if(!f) return;
+    setFileName(f.name);
+    await readFile(f);
+  });
+
+  const dz = $('dropZone');
+  dz.addEventListener('dragover', (e)=>{e.preventDefault();dz.style.borderColor='rgba(122,162,255,.75)';});
+  dz.addEventListener('dragleave', ()=>{dz.style.borderColor='rgba(122,162,255,.35)';});
+  dz.addEventListener('drop', async (e)=>{
+    e.preventDefault();
+    dz.style.borderColor='rgba(122,162,255,.35)';
+    const f = e.dataTransfer.files?.[0];
+    if(!f) return;
+    setFileName(f.name);
+    $('fileInput').value = '';
+    await readFile(f);
+  });
+
+  $('sheetSelect').addEventListener('change', (e)=>{
+    autoMapForSheet(e.target.value);
+  });
+
+  $('processBtn').addEventListener('click', ()=>{
+    processAll();
+  });
+
+  $('downloadBtn').addEventListener('click', async ()=>{
+    await downloadZip();
+  });
+
+  // If user changes mapping or config after processing, they can just press process again.
+</script>
+</body>
+</html>
